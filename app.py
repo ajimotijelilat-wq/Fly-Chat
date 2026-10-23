@@ -1,10 +1,11 @@
-import os, requests, psycopg2, json
-from flask import Flask, request, jsonify, session, redirect, render_template_string
+import os, requests, psycopg2, json, base64
+from flask import Flask, request, jsonify, session, redirect, render_template_string, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "MOTIZ-AI-ULTRA-SECRET-2026")
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "") or os.environ.get("OPENROUTER_API_KEY", "")
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 FAVICON = "https://files.catbox.moe/anbvxj.jpg"
 
@@ -28,195 +29,162 @@ LOGIN_PAGE = """<!DOCTYPE html><html><head><meta name="viewport" content="width=
 SIGNUP_PAGE = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>MOTIZ AI</title><link rel="icon" href="{{favicon}}"><style>body{background:#0a0a0a;color:white;display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;margin:0}.box{background:#151515;padding:40px;border-radius:20px;width:90%;max-width:350px;border:1px solid #222}input{width:100%;padding:14px;margin:8px 0;border-radius:12px;border:none;background:#222;color:white;box-sizing:border-box}button{width:100%;padding:14px;background:white;color:black;border-radius:12px;border:none;font-weight:bold;cursor:pointer;margin-top:10px}</style></head><body><div class="box"><h2>Create Account</h2><form method="POST"><input name="username" placeholder="Username" required><input name="email" placeholder="Email" required><input name="password" type="password" placeholder="Password" required><button>Sign Up</button></form><p><a href="/login" style="color:#888">Already have? Login</a></p></div></body></html>"""
 INFO_PAGE = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>MOTIZ AI</title><link rel="icon" href="{{favicon}}"><style>body{background:#0a0a0a;color:white;display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;margin:0}.box{background:#151515;padding:40px;border-radius:20px;width:90%;max-width:400px;border:1px solid #222}textarea,input{width:100%;padding:14px;margin:8px 0;border-radius:12px;border:none;background:#222;color:white;box-sizing:border-box}button{width:100%;padding:14px;background:white;color:black;border-radius:12px;border:none;font-weight:bold;cursor:pointer;margin-top:10px}</style></head><body><div class="box"><h2>Welcome {{user}}</h2><form method="POST"><input name="fullname" placeholder="Full Name"><textarea name="about" placeholder="What do you use MOTIZ for?"></textarea><button>Continue</button></form></div></body></html>"""
 
-MAIN_PAGE = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>MOTIZ AI</title><link rel="icon" href="{{favicon}}">
+MAIN_PAGE = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>MOTIZ AI</title><link rel="icon" href="{{favicon}}">
 <style>
 *{box-sizing:border-box}
-body{margin:0;font-family:sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;transition:background 0.3s}
-body.dark{background:#0a0a0a;color:white}
-body.light{background:#f5f5f5;color:black}
-body.light .topbar{background:white;border-color:#ddd}
-body.light .msg.ai{background:white;border:1px solid #ddd;color:black}
-body.light .input-area{background:#f5f5f5}
-body.light .drawer{background:#fff;color:black;border-color:#ddd}
-body.light .drawer-btn{background:#eee;color:black}
-body.shine{animation:shineBg 8s infinite linear}
-@keyframes shineBg{0%{background:#ff0066}20%{background:#00ccff}40%{background:#00ff88}60%{background:#ffcc00}80%{background:#9900ff}100%{background:#ff0066}}
-.topbar{display:flex;justify-content:space-between;align-items:center;padding:15px 20px;background:#111;border-bottom:1px solid #222}
-.menu-btn{background:#222;color:white;border:none;padding:10px 15px;border-radius:10px;cursor:pointer;font-size:20px}
+body{margin:0;font-family:'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+body.dark{background:#0b141a;color:white}
+body.light{background:#efeae2;color:#111}
+body.light .topbar{background:#f0f2f5;color:#111}
+body.light .msgs{background:#efeae2}
+body.light .msg.ai{background:white;color:#111}
+body.light .msg.user{background:#d9fdd3;color:#111}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#202c33;height:60px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:bold;font-size:17px;color:white}
+.logo img{width:32px;height:32px;border-radius:50%}
+.menu-btn{background:transparent;color:white;border:none;font-size:24px;cursor:pointer}
 .chat{flex:1;display:flex;flex-direction:column;overflow:hidden}
-.msgs{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:12px}
-.msg{padding:12px 16px;border-radius:18px;max-width:75%;font-size:15px;line-height:1.5;word-wrap:break-word;box-shadow:0 1px 1px rgba(0,0,0,0.2)}
-.msg.user{background:#25D366;color:black;align-self:flex-end;border-bottom-right-radius:4px;margin-left:auto}
-.msg.ai{background:#1f1f1f;align-self:flex-start;border-bottom-left-radius:4px;white-space:pre-wrap}
-.msg img{max-width:100%;border-radius:12px;margin-top:8px}
-.input-area{display:flex;padding:12px;border-top:1px solid #222;gap:10px;background:#0a0a0a}
-.input-area input{flex:1;padding:14px 18px;border-radius:25px;border:none;background:#1f1f1f;color:white;font-size:16px;outline:none}
-.input-area button{padding:12px 20px;border-radius:25px;border:none;background:white;color:black;font-weight:bold;cursor:pointer}
-.drawer{position:fixed;top:0;right:-320px;width:300px;height:100%;background:#111;border-left:1px solid #222;transition:0.3s ease;padding:20px;z-index:100;display:flex;flex-direction:column;overflow-y:auto}
+.msgs{flex:1;overflow-y:auto;padding:16px 12px;display:flex;flex-direction:column;gap:8px;background:#0b141a;background-image:url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png');background-blend-mode:overlay}
+.msg{position:relative;padding:8px 10px 22px 10px;border-radius:8px;max-width:75%;font-size:14.5px;line-height:1.4;box-shadow:0 1px 0.5px rgba(0,0,0,0.13);word-wrap:break-word}
+.msg.user{background:#005c4b;color:#e9edef;align-self:flex-end;border-top-right-radius:0;margin-left:auto}
+.msg.user::after{content:'';position:absolute;top:0;right:-8px;border-left:8px solid #005c4b;border-top:8px solid transparent}
+.msg.ai{background:#202c33;color:#e9edef;align-self:flex-start;border-top-left-radius:0}
+.msg.ai::before{content:'';position:absolute;top:0;left:-8px;border-right:8px solid #202c33;border-top:8px solid transparent}
+body.light .msg.ai::before{border-right-color:white}
+body.light .msg.user::after{border-left-color:#d9fdd3}
+.msg .time{position:absolute;bottom:3px;right:8px;font-size:11px;color:#8696a0}
+.msg.user .time{color:#53bdeb}
+.msg img.chat-img{max-width:100%;border-radius:8px;margin-top:4px;display:block}
+.input-area{display:flex;align-items:center;padding:8px 10px 12px 10px;gap:6px;background:#202c33}
+body.light .input-area{background:#f0f2f5}
+.input-wrapper{flex:1;display:flex;align-items:center;background:#2a3942;border-radius:24px;padding:5px 10px}
+body.light .input-wrapper{background:white}
+.input-wrapper input{flex:1;padding:8px;border:none;background:transparent;color:white;font-size:15px;outline:none}
+body.light .input-wrapper input{color:#111}
+.attach-btn,.icon-btn{background:transparent!important;border:none;font-size:22px;cursor:pointer;color:#8696a0;padding:4px}
+.drawer{position:fixed;top:0;right:-320px;width:300px;height:100%;background:#111b21;transition:0.3s ease;padding:20px;z-index:100;display:flex;flex-direction:column;overflow-y:auto}
 .drawer.open{right:0}
 .overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:none;z-index:99}
 .overlay.show{display:block}
-.drawer-btn{padding:12px;background:#1a1a1a;border:none;color:white;border-radius:10px;margin:6px 0;text-align:left;cursor:pointer;width:100%;font-size:14px}
-.chat-item{padding:10px;background:#1e1e1e;border-radius:8px;margin:4px 0;cursor:pointer;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.settings-page{position:fixed;top:0;left:0;width:100%;height:100%;background:#0a0a0a;z-index:200;display:none;flex-direction:column;padding:20px;overflow-y:auto}
+.drawer-btn{padding:12px;background:#202c33;border:none;color:white;border-radius:10px;margin:6px 0;width:100%;text-align:left;cursor:pointer}
+.chat-item{padding:10px;background:#202c33;border-radius:8px;margin:5px 0;cursor:pointer;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;user-select:none;color:white}
+.settings-page{position:fixed;top:0;left:0;width:100%;height:100%;background:#0b141a;z-index:200;display:none;flex-direction:column;padding:20px;overflow-y:auto;color:white}
 .settings-page.show{display:flex}
-.settings-page.light{background:#f5f5f5;color:black}
-.switch{display:flex;justify-content:space-between;align-items:center;padding:12px;background:#1a1a1a;border-radius:10px;margin:6px 0}
+.settings-page.light{background:#fff;color:#111}
+.switch{display:flex;justify-content:space-between;align-items:center;padding:12px;background:#202c33;border-radius:10px;margin:6px 0}
 .toggle{width:45px;height:24px;background:#333;border-radius:12px;position:relative;cursor:pointer}
-.toggle.on{background:#25D366}
+.toggle.on{background:#00a884}
 .toggle::after{content:'';position:absolute;top:2px;left:2px;width:20px;height:20px;background:white;border-radius:50%;transition:0.3s}
 .toggle.on::after{left:23px}
+.context-menu{position:fixed;background:#233138;border:1px solid #333;border-radius:12px;padding:6px;z-index:300;display:none;min-width:160px}
+.context-menu button{display:block;width:100%;text-align:left;padding:10px;background:none;border:none;color:white;cursor:pointer;border-radius:8px}
+.context-menu button:hover{background:#2a3942}
+.modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:250;display:none;justify-content:center;align-items:center}
+.modal.show{display:flex}
+.modal-box{background:#202c33;padding:25px;border-radius:18px;width:90%;max-width:400px;border:1px solid #333;color:white}
+.modal-box input{width:100%;padding:12px;border-radius:10px;border:none;background:#2a3942;color:white;margin:10px 0}
 </style></head><body class="dark">
 
-<div class="topbar"><h3>MOTIZ AI</h3><button class="menu-btn" onclick="toggleDrawer()">☰</button></div>
+<div class="topbar"><div class="logo"><img src="{{favicon}}"><span>MOTIZ AI</span></div><button class="menu-btn" onclick="toggleDrawer()">☰</button></div>
 <div class="overlay" id="overlay" onclick="toggleDrawer()"></div>
+<div class="drawer" id="drawer"><h3>Dashboard</h3><button class="drawer-btn" onclick="newChat()">+ New Chat</button><div id="chatList" style="flex:1;margin-top:10px"></div><button class="drawer-btn" onclick="openSettings()">⚙️ Settings</button><button class="drawer-btn" style="margin-top:10px;background:#0a332c" onclick="location.href='/logout'">🚪 Sign Out</button><p style="font-size:11px;color:#8696a0">User: {{user}} | HF: {{'ON' if hf_on else 'OFF'}}</p></div>
 
-<div class="drawer" id="drawer">
-<h3 style="margin-top:0">Dashboard</h3>
-<button class="drawer-btn" onclick="newChat()">+ New Chat</button>
-<div id="chatList" style="flex:1;margin-top:10px"></div>
-<button class="drawer-btn" onclick="openSettings()">⚙️ Settings</button>
-<button class="drawer-btn" style="margin-top:10px;background:#222" onclick="location.href='/logout'">🚪 Sign Out</button>
-<p style="font-size:11px;color:#666">User: {{user}}</p>
-</div>
-
-<!-- SETTINGS PAGE -->
 <div class="settings-page" id="settingsPage">
-<div style="display:flex;justify-content:space-between;align-items:center"><h2>Settings</h2><button onclick="closeSettings()" style="background:#222;color:white;border:none;padding:10px 15px;border-radius:10px">✕ Close</button></div>
-
-<h3>Appearance</h3>
-<button class="drawer-btn" onclick="setTheme('dark')">🌙 Dark Mode (Default)</button>
-<button class="drawer-btn" onclick="setTheme('light')">☀️ Light Mode</button>
-<button class="drawer-btn" onclick="setTheme('shine')">✨ Shine Mode</button>
-<div style="margin:10px 0"><label>🎨 Custom Background:</label><input type="color" id="customColor" style="width:100%;height:45px;margin-top:5px" oninput="setCustom(this.value)"><button class="drawer-btn" onclick="saveCustom()">Save Custom Color</button></div>
-
-<h3>Sound</h3>
-<div class="switch"><span>🔔 Notification Sound (Ding when AI replies)</span><div class="toggle" id="soundToggle" onclick="toggleSound()"></div></div>
-
-<h3>Chat</h3>
-<button class="drawer-btn" style="background:#ff3333;color:white" onclick="clearAllChats()">🗑️ Clear All Chats</button>
-
-<h3>About MOTIZ AI</h3>
-<p style="font-size:14px;line-height:1.6;color:#888">MOTIZ AI was created by MOTIZ, whose real name is Ajimoti Hamzat. He attends Ojoo High School, Alaka Ibadan. He created MOTIZ AI while he was in SSS 3. He is a science student who loves coding, but coding is not his talent — creativity is.</p>
-<p style="font-size:12px;color:#555">Version 2.0 | Port Harcourt, NG</p>
+<div style="display:flex;justify-content:space-between;align-items:center"><h2>Settings</h2><button onclick="closeSettings()" style="background:#202c33;color:white;border:none;padding:10px 15px;border-radius:10px">✕</button></div>
+<h3>Appearance</h3><button class="drawer-btn" onclick="setTheme('dark')">🌙 Dark</button><button class="drawer-btn" onclick="setTheme('light')">☀️ Light</button><div style="margin:10px 0"><label>🎨 Custom Background:</label><input type="color" id="customColor" style="width:100%;height:45px" oninput="setCustom(this.value)"><button class="drawer-btn" onclick="saveCustom()">Save</button></div>
+<h3>Sound</h3><div class="switch"><span>🔔 Ding Sound</span><div class="toggle" id="soundToggle" onclick="toggleSound()"></div></div>
+<h3>Notifications</h3><div class="switch"><span>📱 Phone Notification</span><div class="toggle" id="notifToggle" onclick="toggleNotif()"></div></div>
+<h3>Chat</h3><button class="drawer-btn" style="background:#ff3333;color:white" onclick="clearAllChats()">🗑️ Clear All</button>
+<h3>Image</h3><p style="font-size:12px;color:#8696a0">HuggingFace token status: <b>{{'ACTIVE ✅' if hf_on else 'NOT SET - using Pollinations'}}</b><br>Model: stabilityai/stable-diffusion-xl-base-1.0<br>Get token: https://huggingface.co/settings/tokens</p>
+<h3>About</h3><p style="font-size:13px">Created by MOTIZ (Ajimoti Hamzat) — Ojoo High School, Alaka Ibadan — SSS 3 — creativity is his talent.</p>
 </div>
+
+<div class="modal" id="imgModal"><div class="modal-box"><h3>🎨 Generate Image</h3><input id="imgPrompt" placeholder="Describe image..."><div style="display:flex;gap:8px"><button onclick="closeImgModal()" style="background:#333;color:white">Cancel</button><button onclick="generateFromModal()" style="background:#00a884;color:white">Generate</button></div><p id="imgStatus" style="font-size:12px;color:#8696a0;margin-top:10px"></p></div></div>
+
+<div class="context-menu" id="ctxMenu"><button onclick="renameChat()">✏️ Rename</button><button onclick="deleteChat()">🗑️ Delete</button><button onclick="hideChat()">👁️ Hide</button><button onclick="lockChat()">🔒 Lock</button><button onclick="closeCtx()">✕ Close</button></div>
 
 <div class="chat"><div class="msgs" id="msgs"></div>
-<div class="input-area"><input id="inp" placeholder="Ask MOTIZ or type 'image: cat'..."><button onclick="send()">Send</button></div></div>
+<div class="input-area">
+<button class="attach-btn" onclick="document.getElementById('fileInput').click()">📎</button>
+<input type="file" id="fileInput" accept="image/*" style="display:none" onchange="handleFile(this)">
+<button class="icon-btn" onclick="openImgModal()">🎨</button>
+<div class="input-wrapper"><input id="inp" placeholder="Message"><button class="attach-btn" onclick="send()" style="color:#00a884">➤</button></div>
+</div></div>
 
-<audio id="ding" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3"></audio>
+<audio id="ding" src="https://cdn.freesound.org/previews/840/840284_13690175-lq.mp3"></audio>
 
 <script>
 let drawer=document.getElementById('drawer'); let overlay=document.getElementById('overlay');
 function toggleDrawer(){drawer.classList.toggle('open');overlay.classList.toggle('show')}
 function openSettings(){document.getElementById('settingsPage').classList.add('show'); drawer.classList.remove('open'); overlay.classList.remove('show')}
 function closeSettings(){document.getElementById('settingsPage').classList.remove('show')}
-
-let currentChatId = Date.now();
-let allChats = JSON.parse(localStorage.getItem('motiz_chats')||'{}');
-let soundEnabled = localStorage.getItem('motiz_sound')==='on';
-
-function updateSoundUI(){
- let t=document.getElementById('soundToggle');
- if(soundEnabled) t.classList.add('on'); else t.classList.remove('on');
-}
-function toggleSound(){
- soundEnabled=!soundEnabled;
- localStorage.setItem('motiz_sound', soundEnabled?'on':'off');
- updateSoundUI();
- if(soundEnabled){ document.getElementById('ding').play(); }
-}
-updateSoundUI();
-
-function setTheme(t){
- document.body.className=t;
- document.getElementById('settingsPage').className='settings-page '+(t==='light'?'light':'')+' show';
- localStorage.setItem('motiz_theme',t);
- if(t!=='shine') document.body.style.background='';
-}
-function setCustom(c){document.body.className=''; document.body.style.background=c}
-function saveCustom(){localStorage.setItem('motiz_theme',document.body.style.background); alert('Saved!')}
-
-let savedTheme=localStorage.getItem('motiz_theme');
-if(savedTheme){
- if(savedTheme.startsWith('#')||savedTheme.startsWith('rgb')){document.body.style.background=savedTheme}
- else if(savedTheme){ document.body.className=savedTheme; }
-}
-
-function renderChatList(){
- let html='';
- Object.keys(allChats).sort((a,b)=>b-a).forEach(id=>{
-  let title=(allChats[id].title||'New Chat').substring(0,28);
-  html+=`<div class=chat-item onclick="loadChat('${id}')">${title}</div>`
- });
- document.getElementById('chatList').innerHTML=html;
-}
-
-function newChat(){
- currentChatId=Date.now();
- document.getElementById('msgs').innerHTML=`<div class=msg ai>Hello {{user}}! I'm MOTIZ AI — created and developed by MOTIZ (Ajimoti Hamzat) from Ojoo High School, Alaka Ibadan. He made me while in SSS 3. I can chat and generate images. Try: 'image: a cat in space'</div>`;
- renderChatList();
-}
-
-function loadChat(id){
- currentChatId=id;
- let chat=allChats[id];
- let msgsDiv=document.getElementById('msgs'); msgsDiv.innerHTML='';
- chat.messages.forEach(m=>{
-  if(m.role==='user') msgsDiv.innerHTML+=`<div class=msg user>${m.content}</div>`;
-  else msgsDiv.innerHTML+=`<div class=msg ai>${m.content}</div>`;
- });
- msgsDiv.scrollTop=msgsDiv.scrollHeight;
- toggleDrawer();
-}
-
-function clearAllChats(){
- if(confirm('Clear all chats? This cannot be undone.')){
-  allChats={}; localStorage.removeItem('motiz_chats'); renderChatList(); newChat();
-  fetch('/api/clear_chats',{method:'POST'});
- }
-}
-
-function saveCurrentChat(){
- if(!allChats[currentChatId]) allChats[currentChatId]={title:'', messages:[]};
- localStorage.setItem('motiz_chats',JSON.stringify(allChats));
- renderChatList();
- fetch('/api/save_chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:currentChatId, messages:allChats[currentChatId].messages})});
-}
-
+function openImgModal(){document.getElementById('imgModal').classList.add('show')}
+function closeImgModal(){document.getElementById('imgModal').classList.remove('show')}
+let currentChatId = Date.now(); let allChats = JSON.parse(localStorage.getItem('motiz_chats')||'{}'); let selectedChatId=null;
+let soundEnabled = localStorage.getItem('motiz_sound')==='on'; let notifEnabled = localStorage.getItem('motiz_notif')==='on';
+function toggleNotif(){ if(!notifEnabled){ Notification.requestPermission().then(p=>{ if(p==='granted'){ notifEnabled=true; localStorage.setItem('motiz_notif','on'); updateNotifUI(); } }); } else { notifEnabled=false; localStorage.setItem('motiz_notif','off'); updateNotifUI(); } }
+function updateNotifUI(){ let t=document.getElementById('notifToggle'); if(notifEnabled) t.classList.add('on'); else t.classList.remove('on'); }
+function updateSoundUI(){ let t=document.getElementById('soundToggle'); if(soundEnabled) t.classList.add('on'); else t.classList.remove('on'); }
+function toggleSound(){ soundEnabled=!soundEnabled; localStorage.setItem('motiz_sound', soundEnabled?'on':'off'); updateSoundUI(); if(soundEnabled) document.getElementById('ding').play(); }
+updateSoundUI(); updateNotifUI();
+function showRealNotif(text){ if(notifEnabled && document.hidden && Notification.permission==='granted'){ new Notification('MOTIZ AI', {body:text.substring(0,100), icon:'{{favicon}}'}); } }
+function getTime(){ let d=new Date(); return d.getHours()+':'+String(d.getMinutes()).padStart(2,'0'); }
+function setTheme(t){ document.body.className=t; let sp=document.getElementById('settingsPage'); sp.className='settings-page '+(t==='light'?'light':'')+' show'; localStorage.setItem('motiz_theme',t); if(t!=='shine') document.body.style.background=''; }
+function setCustom(c){document.body.className=''; document.body.style.background=c; localStorage.setItem('motiz_theme',c);}
+function saveCustom(){alert('Saved!')}
+let savedTheme=localStorage.getItem('motiz_theme'); if(savedTheme){ if(savedTheme.startsWith('#')||savedTheme.startsWith('rgb')){document.body.style.background=savedTheme} else { document.body.className=savedTheme; } }
+function renderChatList(){ let html=''; Object.keys(allChats).sort((a,b)=>b-a).forEach(id=>{ let c=allChats[id]; if(c.hidden) return; let title=(c.title||'New Chat').substring(0,28); let cls='chat-item '+(c.locked?'locked':''); html+=`<div class="${cls}" data-id="${id}" onmousedown="startPress('${id}')" onmouseup="endPress()" ontouchstart="startPress('${id}')" ontouchend="endPress()" onclick="loadChat('${id}')">${title}</div>` }); document.getElementById('chatList').innerHTML=html; }
+let pressTimer=null; function startPress(id){ pressTimer=setTimeout(()=>{ openCtx(id); }, 700); } function endPress(){ clearTimeout(pressTimer); }
+function openCtx(id){ selectedChatId=id; let m=document.getElementById('ctxMenu'); m.style.display='block'; m.style.top='40%'; m.style.left='30%'; }
+function closeCtx(){document.getElementById('ctxMenu').style.display='none'}
+function deleteChat(){ if(selectedChatId && confirm('Delete?')){ delete allChats[selectedChatId]; localStorage.setItem('motiz_chats',JSON.stringify(allChats)); renderChatList(); newChat(); } closeCtx(); }
+function renameChat(){ if(selectedChatId){ let n=prompt('Rename:', allChats[selectedChatId].title); if(n){ allChats[selectedChatId].title=n; localStorage.setItem('motiz_chats',JSON.stringify(allChats)); renderChatList(); } } closeCtx(); }
+function hideChat(){ if(selectedChatId){ allChats[selectedChatId].hidden=!allChats[selectedChatId].hidden; localStorage.setItem('motiz_chats',JSON.stringify(allChats)); renderChatList(); } closeCtx(); }
+function lockChat(){ if(selectedChatId){ allChats[selectedChatId].locked=!allChats[selectedChatId].locked; localStorage.setItem('motiz_chats',JSON.stringify(allChats)); renderChatList(); } closeCtx(); }
+function newChat(){ currentChatId=Date.now(); document.getElementById('msgs').innerHTML=`<div class=msg ai>Hello! I'm MOTIZ AI. How can I help you today?<span class=time>${getTime()}</span></div>`; renderChatList(); }
+function loadChat(id){ if(allChats[id].locked){ let pin=prompt('Locked. Enter username:'); if(pin!=='{{user}}'){ alert('Wrong'); return; } } currentChatId=id; let chat=allChats[id]; let msgsDiv=document.getElementById('msgs'); msgsDiv.innerHTML=''; chat.messages.forEach(m=>{ if(m.role==='user') msgsDiv.innerHTML+=`<div class=msg user>${m.content}<span class=time>${getTime()} ✓✓</span></div>`; else msgsDiv.innerHTML+=`<div class=msg ai>${m.content}<span class=time>${getTime()}</span></div>`; }); msgsDiv.scrollTop=msgsDiv.scrollHeight; toggleDrawer(); }
+function clearAllChats(){ if(confirm('Clear all?')){ allChats={}; localStorage.removeItem('motiz_chats'); renderChatList(); newChat(); fetch('/api/clear_chats',{method:'POST'}); } }
+function saveCurrentChat(){ if(!allChats[currentChatId]) allChats[currentChatId]={title:'', messages:[]}; localStorage.setItem('motiz_chats',JSON.stringify(allChats)); renderChatList(); fetch('/api/save_chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:currentChatId, messages:allChats[currentChatId].messages})}); }
+function handleFile(input){ let file=input.files[0]; if(!file) return; let reader=new FileReader(); reader.onload=function(e){ let base64=e.target.result; document.getElementById('msgs').innerHTML+=`<div class=msg user><img class=chat-img src="${base64}"><span class=time>${getTime()} ✓✓</span></div>`; if(!allChats[currentChatId]) allChats[currentChatId]={title:'Image', messages:[]}; allChats[currentChatId].messages.push({role:'user', content:`<img class=chat-img src="${base64}">`}); saveCurrentChat(); document.getElementById('msgs').scrollTop=document.getElementById('msgs').scrollHeight; }; reader.readAsDataURL(file); }
 let msgsDiv=document.getElementById('msgs'); let inp=document.getElementById('inp');
-
+async function generateFromModal(){
+ let prompt=document.getElementById('imgPrompt').value.trim(); if(!prompt) return;
+ closeImgModal(); document.getElementById('imgStatus').innerText='';
+ msgsDiv.innerHTML+=`<div class=msg user>🎨 ${prompt}<span class=time>${getTime()} ✓✓</span></div>`;
+ msgsDiv.innerHTML+=`<div class=msg ai id="genStatus">⏳ Generating via HuggingFace SDXL...<span class=time>${getTime()}</span></div>`;
+ msgsDiv.scrollTop=msgsDiv.scrollHeight;
+ try{
+  let r=await fetch('/api/generate_image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:prompt})});
+  let d=await r.json();
+  document.getElementById('genStatus')?.remove();
+  if(d.image){
+   msgsDiv.innerHTML+=`<div class=msg ai><img class=chat-img src="${d.image}"><br>${prompt}<span class=time>${getTime()}</span></div>`;
+   if(!allChats[currentChatId]) allChats[currentChatId]={title:prompt, messages:[]};
+   allChats[currentChatId].messages.push({role:'assistant', content:`<img class=chat-img src="${d.image}"> ${prompt}`});
+  } else {
+   let imgUrl=`https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?nologo=true&width=512&height=512&seed=${Math.floor(Math.random()*9999)}`;
+   msgsDiv.innerHTML+=`<div class=msg ai>Fallback Pollinations:<br><img class=chat-img src="${imgUrl}"><span class=time>${getTime()}</span></div>`;
+  }
+ } catch(e){
+  document.getElementById('genStatus')?.remove();
+  let imgUrl=`https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?nologo=true&width=512&height=512`;
+  msgsDiv.innerHTML+=`<div class=msg ai><img class=chat-img src="${imgUrl}"><span class=time>${getTime()}</span></div>`;
+ }
+ saveCurrentChat(); if(soundEnabled) document.getElementById('ding').play(); showRealNotif(prompt);
+ msgsDiv.scrollTop=msgsDiv.scrollHeight;
+}
 async function send(){
  let t=inp.value.trim(); if(!t) return;
- msgsDiv.innerHTML+=`<div class=msg user>${t}</div>`;
+ msgsDiv.innerHTML+=`<div class=msg user>${t}<span class=time>${getTime()} ✓✓</span></div>`;
  if(!allChats[currentChatId]) allChats[currentChatId]={title:t, messages:[]};
- allChats[currentChatId].messages.push({role:'user', content:t});
- allChats[currentChatId].title=t;
- inp.value=''; msgsDiv.scrollTop=msgsDiv.scrollHeight;
- saveCurrentChat();
-
- if(t.toLowerCase().startsWith('image:') || t.toLowerCase().startsWith('/image')){
-  let prompt=t.replace(/image:|\\/image/i,'').trim();
-  let imgUrl=`https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?nologo=true&width=512&height=512&seed=${Math.floor(Math.random()*9999)}`;
-  msgsDiv.innerHTML+=`<div class=msg ai>🎨 "${prompt}"<br><img src="${imgUrl}"><br><small>Free via Pollinations</small></div>`;
-  allChats[currentChatId].messages.push({role:'assistant', content:`<img src="${imgUrl}"> ${prompt}`});
-  saveCurrentChat(); if(soundEnabled) document.getElementById('ding').play();
-  msgsDiv.scrollTop=msgsDiv.scrollHeight;
-  return;
- }
-
+ allChats[currentChatId].messages.push({role:'user', content:t}); allChats[currentChatId].title=t; inp.value=''; msgsDiv.scrollTop=msgsDiv.scrollHeight; saveCurrentChat();
  let r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:allChats[currentChatId].messages})});
- let d=await r.json();
- let aiText=d.content||'Error';
- msgsDiv.innerHTML+=`<div class=msg ai>${aiText}</div>`;
- allChats[currentChatId].messages.push({role:'assistant', content:aiText});
- saveCurrentChat();
- if(soundEnabled) document.getElementById('ding').play();
- msgsDiv.scrollTop=msgsDiv.scrollHeight;
+ let d=await r.json(); let aiText=d.content||'Error';
+ msgsDiv.innerHTML+=`<div class=msg ai>${aiText}<span class=time>${getTime()}</span></div>`;
+ allChats[currentChatId].messages.push({role:'assistant', content:aiText}); saveCurrentChat(); if(soundEnabled) document.getElementById('ding').play(); showRealNotif(aiText); msgsDiv.scrollTop=msgsDiv.scrollHeight;
 }
 inp.addEventListener('keydown',e=>{if(e.key=='Enter') send()})
-renderChatList();
-newChat();
+renderChatList(); newChat();
 </script></body></html>"""
 
 ADMIN_PAGE = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Admin</title><link rel="icon" href="{{favicon}}"><style>body{background:#0a0a0a;color:white;font-family:sans-serif;padding:30px}table{width:100%;border-collapse:collapse;margin-top:20px}th,td{border:1px solid #222;padding:10px;text-align:left}</style></head><body><h1>MOTIZ Admin</h1><h3>Users ({{count}})</h3><table><tr><th>ID</th><th>Username</th><th>Email</th></tr>{% for u in users %}<tr><td>{{u[0]}}</td><td>{{u[1]}}</td><td>{{u[2]}}</td></tr>{% endfor %}</table><br><a href="/chat" style="color:#888">Go to Main</a></body></html>"""
@@ -250,7 +218,8 @@ def info_page():
 @app.route('/chat')
 def chat_page():
     if 'user' not in session: return redirect('/login')
-    return render_template_string(MAIN_PAGE, user=session['user'], favicon=FAVICON)
+    return render_template_string(MAIN_PAGE, user=session['user'], favicon=FAVICON, hf_on=bool(HF_TOKEN))
+
 @app.route('/logout')
 def logout(): session.clear(); return redirect('/login')
 
@@ -258,20 +227,34 @@ def logout(): session.clear(); return redirect('/login')
 def api_chat():
     if 'user' not in session: return jsonify({"content":"Login required"})
     data=request.json; msgs=data.get('messages',[])
-    system_prompt = {
-        "role":"system",
-        "content":"You are MOTIZ AI. NOT OpenAI. Created and developed by MOTIZ whose real name is Ajimoti Hamzat. He attends Ojoo High School Alaka Ibadan, created you while he was in SSS 3. He is a science student who loves coding but coding is not his talent. Your name is MOTIZ AI. If anyone asks who made you, who created you, who developed you, say: I was created and developed by MOTIZ whose real name is Ajimoti Hamzat. He attends Ojoo High School Alaka Ibadan, he created me while he was in SSS 3, he is a science student who loves coding but coding is not his talent. Never say OpenAI, ChatGPT, Meta AI. Always say MOTIZ AI."
-    }
+    system_prompt = {"role":"system","content":"You are MOTIZ AI. Greet short: 'Hello! I'm MOTIZ AI. How can I help you today?' Do NOT mention creator unless asked who created you. If asked, say: I was created and developed by MOTIZ whose real name is Ajimoti Hamzat. He attends Ojoo High School, Alaka Ibadan, he created me while he was in SSS 3, he is a science student who loves coding but coding is not his talent. Never say OpenAI."}
     final_msgs = [system_prompt] + msgs[-12:]
     try:
-        r=requests.post("https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
-            json={"model": "openai/gpt-oss-20b", "messages": final_msgs},
-            timeout=30)
+        r=requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}, json={"model": "openai/gpt-oss-20b", "messages": final_msgs}, timeout=30)
         j=r.json()
         if 'choices' not in j: return jsonify({"content": f"Error: {j}"})
         return jsonify({"content": j['choices'][0]['message']['content']})
     except Exception as e: return jsonify({"content": f"Error: {e}"})
+
+@app.route('/api/generate_image', methods=['POST'])
+def generate_image():
+    if 'user' not in session: return jsonify({"error":"login"})
+    data=request.json; prompt=data.get('prompt','')
+    if not prompt: return jsonify({"error":"no prompt"})
+    # Try HuggingFace if token set
+    if HF_TOKEN:
+        try:
+            headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+            r = requests.post("https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0", headers=headers, json={"inputs": prompt}, timeout=60)
+            if r.status_code==200:
+                b64 = base64.b64encode(r.content).decode('utf-8')
+                return jsonify({"image": f"data:image/png;base64,{b64}"})
+            else:
+                print("HF error", r.text)
+        except Exception as e:
+            print("HF exception", e)
+    # Fallback to Pollinations URL will be handled frontend
+    return jsonify({"fallback": True})
 
 @app.route('/api/save_chat', methods=['POST'])
 def save_chat():
